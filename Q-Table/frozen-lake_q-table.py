@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 class QLearningTable:
-    def __init__(self, observation_space_n, action_space_n, learning_rate=0.2, reward_decay=0.9, e_greedy=0.9):
+    def __init__(self, observation_space_n, action_space_n, learning_rate=0.1, reward_decay=0.9, e_greedy=0.9):
         self.lr = learning_rate 
         self.gamma = reward_decay # reward decay over time
         self.epsilon = e_greedy # chance of agent picking a random action
@@ -11,7 +11,10 @@ class QLearningTable:
                                     columns=[i for i in range(action_space_n)], 
                                     dtype=np.float64)
 
-    def learn(self, state, next_state, action, reward, terminated , truncated):
+    def set_greedy_epsilon(self, e_greedy):
+        self.epsilon = e_greedy
+
+    def learn(self, state, next_state, action, reward):
         '''
         NEW Q(S, A) = Q(S, A) + learning_rate * (reward(S, A) + (discount_rate * Q(S',A) - Q(S,A_)
         '''
@@ -28,20 +31,35 @@ class QLearningTable:
 
 
 if __name__ == "__main__":
-    env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=False)
-    Q_table = QLearningTable(env.observation_space.n, env.action_space.n)
-
+    # env just for the inital q-table population.
+    env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True)
+    Q_table = QLearningTable(env.observation_space.n, env.action_space.n, e_greedy=0)
     observation, info = env.reset()
 
-    for i in range(10000):
+    for i in range(5000):
         action = Q_table.choose_action(observation) # choose an action based on the q-table
         next_observation, reward, terminated, truncated, info = env.step(action) # take that action
-        Q_table.learn(observation, next_observation, action, reward, terminated, truncated) # learn from the action
+        Q_table.learn(observation, next_observation, action, reward) # learn from the action
         observation = next_observation # update the observation
         print(Q_table.q_table)
         if terminated or truncated:
-            # print(reward)
             observation, info = env.reset()
-
     env.close()
+
+    # second env with rendering on with a more greedy epsilon of 0.9
+    env = gym.make('FrozenLake-v1', desc=None, map_name="4x4", is_slippery=True, render_mode="human")
+    Q_table.set_greedy_epsilon(0.9)
+    observation, info = env.reset()
+
+    for i in range(500):
+        action = Q_table.choose_action(observation) # choose an action based on the q-table
+        next_observation, reward, terminated, truncated, info = env.step(action) # take that action
+        Q_table.learn(observation, next_observation, action, reward) # learn from the action
+        observation = next_observation # update the observation
+        print(Q_table.q_table)
+        if terminated or truncated:
+            observation, info = env.reset()
+    env.close()
+
+
     
