@@ -21,12 +21,12 @@ class PolicyNetwork(tf.keras.Model):
         return x
 
 class Agent: 
-    def __init__(self, obs_size, action_size, discount_factor=0.9, learning_rate=0.02):
+    def __init__(self, obs_size, action_size, discount_factor=0.9, learning_rate=0.01):
         self.obs_size = obs_size
         self.action_size = action_size
         self.discount_factor = discount_factor
         self.model = PolicyNetwork(obs_size, action_size)
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+        self.optimizer = tf.keras.optimizers.SGD(learning_rate)
 
     def sample_action_from_policy(self, state):
         prob = self.model(np.array([state]))
@@ -35,15 +35,14 @@ class Agent:
         return int(action.numpy()[0])
     
     def log_prob_of_action(self, state, action):
-        prob = self.model(np.array([state]), training=True)
+        prob = self.model(np.array([state]))
         return tfp.distributions.Categorical(probs=prob).log_prob(action)
 
     
     def train(self, episode_states, episode_actions, episode_rewards):
-        episode_rewards.reverse()
         sum_reward = 0
         returns = []
-        for r in episode_rewards:
+        for r in episode_rewards[::-1]:
             sum_reward = sum_reward * self.discount_factor + r
             returns.append(sum_reward)
         returns.reverse()
@@ -55,19 +54,21 @@ class Agent:
         # Normalize the returns
         normalized_returns = [(r - mean_return) / (std_return + 1e-9) for r in returns]
         
-        for state, reward, action in zip(episode_states, normalized_returns, episode_actions):
-            with tf.GradientTape() as tape:
+        with tf.GradientTape() as tape:
+            loss = 0
+            for state, action, discounted_reward in zip(episode_states, episode_actions, normalized_returns):
                 log_prob = self.log_prob_of_action(state, action)
-                loss = -log_prob * reward
-            grads = tape.gradient(loss, self.model.trainable_variables)
-            # Apply clipped gradients to prevent exploding gradients
-            clipped_grads, _ = tf.clip_by_global_norm(grads, 1.0)
-            self.optimizer.apply_gradients(zip(clipped_grads, self.model.trainable_variables))
+                loss += -log_prob * discounted_reward
+                
+        grads = tape.gradient(loss, self.model.trainable_variables)
+        # Apply clipped gradients to prevent exploding gradients
+        clipped_grads, _ = tf.clip_by_global_norm(grads, 1.0)
+        self.optimizer.apply_gradients(zip(clipped_grads, self.model.trainable_variables))
 
 num_episodes = 1000
 
 # Define the policy network with parameters theta
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 obs_size = env.observation_space.shape[0]
 action_size = env.action_space.n
 CPAgent = Agent(obs_size, action_size)
