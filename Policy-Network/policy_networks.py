@@ -5,17 +5,14 @@ import tensorflow_probability as tfp
 from datetime import datetime
 
 class PolicyNetwork(tf.keras.Model):
-    def __init__(self, obs_size, action_size):
+    def __init__(self, action_size):
         super().__init__()
-        self.input_layer = tf.keras.layers.InputLayer(input_shape=[obs_size])
         self.d1 = tf.keras.layers.Dense(64, activation='relu')
         self.d2 = tf.keras.layers.Dense(32, activation='relu')
         self.out = tf.keras.layers.Dense(action_size,activation='softmax')
     
     def call(self, state):
-        x = tf.convert_to_tensor(state)
-        x = self.input_layer(state)
-        x = self.d1(x)
+        x = self.d1(state)
         x = self.d2(x)
         x = self.out(x)
         return x
@@ -69,9 +66,8 @@ num_episodes = 1000
 
 # Define the policy network with parameters theta
 env = gym.make('CartPole-v1')
-obs_size = env.observation_space.shape[0]
 action_size = env.action_space.n
-CPAgent = Agent(obs_size, action_size)
+CPAgent = Agent(action_size)
 
 # Setup tensorboard
 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
