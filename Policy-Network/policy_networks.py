@@ -18,11 +18,10 @@ class PolicyNetwork(tf.keras.Model):
         return x
 
 class Agent: 
-    def __init__(self, obs_size, action_size, discount_factor=0.9, learning_rate=0.01):
-        self.obs_size = obs_size
+    def __init__(self, action_size, discount_factor=0.9, learning_rate=0.01):
         self.action_size = action_size
         self.discount_factor = discount_factor
-        self.model = PolicyNetwork(obs_size, action_size)
+        self.model = PolicyNetwork(action_size)
         self.optimizer = tf.keras.optimizers.SGD(learning_rate)
 
     def sample_action_from_policy(self, state):
