@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import gymnasium as gym
 import numpy as np
+from datetime import datetime
 
 class ActorModel(tf.keras.Model):
     def __init__(self, action_size):
@@ -62,9 +63,10 @@ class Agent():
     def update_critic(self, states, returns):
         with tf.GradientTape() as tape:
             predicted_values = self.critic_model(tf.expand_dims(states, 0))
-            loss = self.critic_loss(returns, predicted_values)
-        critic_gradient = tape.gradient(loss, self.critic_model.trainable_variables)  
+            critic_loss = self.critic_loss(returns, predicted_values)
+        critic_gradient = tape.gradient(critic_loss, self.critic_model.trainable_variables)  
         self.critic_opt.apply_gradients(zip(critic_gradient, self.critic_model.trainable_variables))
+        return critic_loss
     
     def update_actor(self, states, actions, advantages):
         with tf.GradientTape() as tape:
@@ -76,12 +78,18 @@ class Agent():
             actor_loss = -tf.reduce_mean(tf.math.log(chosen_action_probs) * advantages)
         actor_gradient = tape.gradient(actor_loss, self.actor_model.trainable_variables)  
         self.actor_opt.apply_gradients(zip(actor_gradient, self.actor_model.trainable_variables))
-
+        return actor_loss
 
 env = gym.make('LunarLander-v2',
                continuous=False)
 action_size = env.action_space.n
 agent = Agent(action_size)
+
+# Setup tensorboard
+timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+log_dir = f'logs/{timestamp}'
+summary_writer = tf.summary.create_file_writer(log_dir)
+
 num_episodes = 1000
 
 for episode in range(num_episodes):
@@ -113,10 +121,17 @@ for episode in range(num_episodes):
     returns = agent.calculate_discounted_returns(rewards)
     
     # Update the critic network using the returns as targets
-    agent.update_critic(states, returns)
+    critic_loss = agent.update_critic(states, returns)
     
     # Compute the advantage estimates (returns - value estimates) for the actor update
     advantages = agent.predict_advantage(returns, states)
     
     # Update the actor network using policy gradients with advantages as weights
-    agent.update_actor(states, actions, advantages)
+    actor_loss = agent.update_actor(states, actions, advantages)
+    
+    # Print reward / tensorboard
+    with summary_writer.as_default():
+        tf.summary.scalar("Reward", episode_reward, step=episode)
+        tf.summary.scalar("Critic Loss", critic_loss, step=episode)
+        tf.summary.scalar("Actor Loss", actor_loss, step=episode)
+    print('Reward: {}, Critic Loss: {}, Actor Loss: {}'.format(episode_reward,critic_loss,actor_loss))
