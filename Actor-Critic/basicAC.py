@@ -27,14 +27,17 @@ class CriticModel(tf.keras.Model):
         return x
 
 class Agent():
-    def __init__(self, discount_factor = 0.9):
-        self.actor_model = ActorModel()
-        self.critic_model = CriticModel()
+    def __init__(self, action_size, discount_factor=0.9, actor_learning_rate=0.01, critic_learning_rate=0.01):
         self.gamma = discount_factor
+        self.actor_model = ActorModel(action_size)
+        self.actor_opt = tf.keras.optimizers.Adam(learning_rate=actor_learning_rate)
+        self.critic_model = CriticModel()
+        self.critic_opt = tf.keras.optimizers.Adam(learning_rate=critic_learning_rate)
+        self.critic_loss = tf.keras.losses.MeanSquaredError()
     
     def select_action(self, state):
         softmax_prob = self.actor_model(np.array([state]))
-        dist = tfp.distributions.Categorical(prob=softmax_prob)
+        dist = tfp.distributions.Categorical(probs=softmax_prob)
         action = dist.sample()
         return int(action.numpy()[0])
     
@@ -45,59 +48,75 @@ class Agent():
             sum_reward = sum_reward * self.gamma + r
             returns.append(sum_reward)
         returns.reverse()
+        return returns
     
-    def predict_advantage(self, states):
-        pass
+    def predict_advantage(self, returns, states):
+        advantages = []
+        value_estimates = [self.critic_model(state) for state in tf.expand_dims(states, 0)]
+        value_estimates = tf.reshape(value_estimates, [-1])
+        for i in range(len(states)):
+            advantage = returns[i] - value_estimates[i]
+            advantages.append(advantage)
+        return advantages
     
-    def update_critic(self, states, returns, learning_rate_critic):
-        pass
+    def update_critic(self, states, returns):
+        with tf.GradientTape() as tape:
+            predicted_values = self.critic_model(tf.expand_dims(states, 0))
+            loss = self.critic_loss(returns, predicted_values)
+        critic_gradient = tape.gradient(loss, self.critic_model.trainable_variables)  
+        self.critic_opt.apply_gradients(zip(critic_gradient, self.critic_model.trainable_variables))
     
-    def update_actor(self, states, actions, advantages, learning_rate_actor):
-        pass
+    def update_actor(self, states, actions, advantages):
+        with tf.GradientTape() as tape:
+            action_pred = self.actor_model(tf.expand_dims(states, 0))
+            # Grab the indicies of the actions taken at each action_prediction
+            action_indices = tf.range(0, tf.shape(action_pred)[0]) * tf.shape(action_pred)[1] + actions
+            # Select the action from the index list
+            chosen_action_probs = tf.gather(tf.reshape(action_pred, [-1]), action_indices)
+            actor_loss = -tf.reduce_mean(tf.math.log(chosen_action_probs) * advantages)
+        actor_gradient = tape.gradient(actor_loss, self.actor_model.trainable_variables)  
+        self.actor_opt.apply_gradients(zip(actor_gradient, self.actor_model.trainable_variables))
 
 
 env = gym.make('LunarLander-v2',
-               continuous=False,
-               render_mode='human')
-agent = Agent()
-
-# Set hyperparameters
-learning_rate_actor = ...
-learning_rate_critic = ...
-discount_factor = ...
-num_episodes = ...
+               continuous=False)
+action_size = env.action_space.n
+agent = Agent(action_size)
+num_episodes = 1000
 
 for episode in range(num_episodes):
     state = env.reset()
-    done = False
+    state = state[0]
     
-    # Initialize episode-specific lists to store states, actions, and rewards
     states = []
     actions = []
     rewards = []
+    episode_reward = 0
+    terminated = False
+    truncated =  False
     
-    while not done:
+    while not (terminated or truncated):
         # Actor selects an action based on the current policy
         action = agent.select_action(state)
         
         # Take the selected action and observe the next state and reward
-        next_state, reward, done, _ = env.step(action)
+        next_state, reward, terminated, truncated, _ = env.step(action)
         
         # Store the current state, action, and reward
         states.append(state)
         actions.append(action)
         rewards.append(reward)
-        
+        episode_reward+= reward
         state = next_state
     
     # Calculate the discounted returns for each time step
-    returns = agent.calculate_discounted_returns(rewards, discount_factor)
+    returns = agent.calculate_discounted_returns(rewards)
     
     # Update the critic network using the returns as targets
-    agent.update_critic(states, returns, learning_rate_critic)
+    agent.update_critic(states, returns)
     
     # Compute the advantage estimates (returns - value estimates) for the actor update
-    advantages = returns - agent.predict_advantage(states)
+    advantages = agent.predict_advantage(returns, states)
     
     # Update the actor network using policy gradients with advantages as weights
-    agent.update_actor(states, actions, advantages, learning_rate_actor)
+    agent.update_actor(states, actions, advantages)
