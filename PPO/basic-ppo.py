@@ -67,8 +67,8 @@ class ValueNetwork(tf.keras.Model):
         return x
     
 class Agent():
-    def __init__(self, obs_space, learning_rate=0.01, discount_factor=0.9, epsilon_clip=0.3):
-        self.learning_rate = learning_rate
+    def __init__(self, obs_space, learning_rate=0.01, discount_factor=0.9, epsilon_clip=0.3, lambda_=0.95):
+        self.lambda_ = lambda_
         self.gamma = discount_factor
         self.epsilon_clip = epsilon_clip
         self.value_network = ValueNetwork()
@@ -80,63 +80,31 @@ class Agent():
         probs = self.policy_network(state)
         dist = tfp.distributions.Categorical(probs=probs)
         action = dist.sample()
-        return int(action.numpy()[0])
+        return int(action.numpy()[0]), probs[0]
     
-    def calculate_discounted_returns(self, rewards):
-        sum_reward = 0
-        returns = []
-        for r in rewards[::-1]:
-            sum_reward = sum_reward * self.gamma + r
-            returns.append(sum_reward)
-        returns.reverse()
-        return returns
-    
-    def predict_advantage(self, returns, states):
-        advantages = []
-        value_estimates = [self.critic_model(state) for state in tf.expand_dims(states, 0)]
-        value_estimates = tf.reshape(value_estimates, [-1])
-        for i in range(len(states)):
-            advantage = returns[i] - value_estimates[i]
-            advantages.append(advantage)
-        return advantages
-    
-    def compute_advantages(self, states, rewards, values, next_value, gamma=0.99, lambda_=0.95):
-        """
-        Compute advantages and returns using Generalized Advantage Estimation (GAE)
-        
-        :param rewards: Rewards obtained from the environment, shape: [num_steps,]
-        :param values: Values estimated by the critic, shape: [num_steps,]
-        :param next_value: Value estimated for the next state, shape: []
-        :param dones: Boolean array indicating if an episode is finished at each time step, shape: [num_steps,]
-        :param gamma: Discount factor for future rewards, scalar
-        :param lambda_: GAE lambda parameter, scalar
-        
-        :return: advantages and returns, both shaped: [num_steps,]
-        """
-        
-        num_steps = len(rewards)
+    def compute_advantages(self, states, rewards, dones):
         advantages = np.zeros_like(rewards, dtype=np.float32)
         returns = np.zeros_like(rewards, dtype=np.float32)
+        running_advantage = 0
         values = [self.value_network(state) for state in tf.expand_dims(states, 0)]
+        running_return = values[-1]
         
-        future_adv = 0.0
-        future_ret = next_value
-        for t in reversed(range(num_steps) - 1):
-            # Delta represents the temporal difference error
-            delta = rewards[t] + gamma * values[t+1] - values[t]
-            
-            # Compute advantage using GAE
-            advantages[t] = delta + gamma * lambda_ * future_adv
-            
-            # Compute the return
-            returns[t] = advantages[t] + values[t]
-            
-            # Update the future advantage and return for the next iteration
-            future_adv = advantages[t]
-            future_ret = returns[t]
+        for t in reversed(range(len(rewards))):
+            if t != len(rewards) - 1:
+                bootstrap_value = values[t+1]
+            else:
+                bootstrap_value = 0
+                
+            delta = rewards[t] + self.gamma * bootstrap_value * (1-dones[t]) - values[t]
+            running_advantage = delta + self.gamma * self.lambda_ * running_advantage * (1 - dones[t])
+            advantages[t] = running_advantage
+            returns[t] = running_return
         
+        return advantages, returns
         
 EPISODES = 1000
+DATA_COLLECTION_TIMESTEP = 1000
+
 env = gym.make('LunarLander-v2',
                continuous=False)
 obs_space = env.observation_space.n
@@ -149,11 +117,16 @@ for i in range(EPISODES):
     states = []
     rewards = []
     actions = []
+    dones = []
+    old_probs = []
+    values = []
+    
     episode_reward = 0
     terminated = False
     truncated = False
-    while not (terminated or truncated):
-        action = agent.select_action(state)
+    
+    for i in range(DATA_COLLECTION_TIMESTEP):
+        action, prob = agent.select_action(state)
         
         next_state, reward, terminated, truncated, _ = env.step(action)
         
@@ -161,7 +134,20 @@ for i in range(EPISODES):
         states.append(state)
         rewards.append(reward)
         actions.append(action)
+        if terminated or truncated:
+            dones.append(True)
+        else:
+            dones.append(False)
+        old_probs.append(prob)
         
         state = next_state
+
+        if terminated or truncated:
+            state = env.reset()
         
-    advantages, returns = agent.calculate_advantages_and_returns(trajectories, value_function = V_phi)
+    # Add value estimate for the state after the last state in the batch.
+    values = [agent.value_network(state) for state in tf.expand_dims(states, 0)]
+    next_value = agent.value_network(np.array([state]))
+    values.append(next_value)
+    
+    compute_advantages(states, rewards, values, dones)
